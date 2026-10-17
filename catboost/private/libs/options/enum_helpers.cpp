@@ -314,6 +314,9 @@ MakeRegister(LossInfos,
         EMetricAttribute::IsBinaryClassCompatible
         | EMetricAttribute::IsMultiClassCompatible
     ),
+    Registree(AveragePrecision,
+        EMetricAttribute::IsBinaryClassCompatible
+    ),
     Registree(Accuracy,
         EMetricAttribute::IsBinaryClassCompatible
         | EMetricAttribute::IsMultiClassCompatible

@@ -4616,6 +4616,169 @@ TVector<TParamSet> TMAPKMetric::ValidParamSets() {
     };
 };
 
+/* Average Precision (scikit-learn average_precision_score: step sum of (R_n - R_{n-1}) * P_n) */
+
+namespace {
+    struct TAveragePrecisionMetric : public TNonAdditiveSingleTargetMetric {
+        explicit TAveragePrecisionMetric(const TLossParams& params)
+            : TNonAdditiveSingleTargetMetric(ELossFunction::AveragePrecision, params) {
+            UseWeights.SetDefaultValue(false);
+        }
+
+        static TVector<THolder<IMetric>> Create(const TMetricConfig& config);
+        static TVector<TParamSet> ValidParamSets();
+
+        TMetricHolder Eval(
+                const TVector<TVector<double>>& approx,
+                TConstArrayRef<float> target,
+                TConstArrayRef<float> weight,
+                TConstArrayRef<TQueryInfo> queriesInfo,
+                int begin,
+                int end,
+                NPar::ILocalExecutor& executor) const override {
+                    return Eval(To2DConstArrayRef<double>(approx), /*approxDelta*/{}, /*isExpApprox*/false, target, weight, queriesInfo, begin, end, executor);
+                }
+        TMetricHolder Eval(
+                TConstArrayRef<TConstArrayRef<double>> approx,
+                TConstArrayRef<TConstArrayRef<double>> approxDelta,
+                bool isExpApprox,
+                TConstArrayRef<float> target,
+                TConstArrayRef<float> weight,
+                TConstArrayRef<TQueryInfo> queriesInfo,
+                int begin,
+                int end,
+                NPar::ILocalExecutor& executor) const override;
+        void GetBestValue(EMetricBestValue* valueType, float* bestValue) const override;
+    };
+}
+
+THolder<IMetric> MakeBinClassAveragePrecisionMetric(const TLossParams& params) {
+    return MakeHolder<TAveragePrecisionMetric>(params);
+}
+
+TVector<THolder<IMetric>> TAveragePrecisionMetric::Create(const TMetricConfig& config) {
+    CB_ENSURE(config.ApproxDimension == 1, "AveragePrecision is supported only for binary classification");
+    return AsVector(MakeHolder<TAveragePrecisionMetric>(config.Params));
+}
+
+TMetricHolder TAveragePrecisionMetric::Eval(
+    TConstArrayRef<TConstArrayRef<double>> approx,
+    TConstArrayRef<TConstArrayRef<double>> approxDelta,
+    bool isExpApprox,
+    TConstArrayRef<float> target,
+    TConstArrayRef<float> weight,
+    TConstArrayRef<TQueryInfo> /*queriesInfo*/,
+    int begin,
+    int end,
+    NPar::ILocalExecutor& /*executor*/
+) const {
+    Y_ASSERT(!isExpApprox);
+    CB_ENSURE(approx.size() == 1, "AveragePrecision is supported only for binary classification");
+    CB_ENSURE_INTERNAL(approx[0].size() == target.size(), "Inconsistent approx and target size");
+
+    constexpr float PositiveClass = 1;
+
+    TMetricHolder error(2);
+    error.Stats[1] = 1;
+
+    int elemCount = end - begin;
+
+    struct Sample {
+        double approx;
+        float target;
+        float weight;
+    };
+
+    TVector<Sample> sortedSamples;
+    sortedSamples.reserve(elemCount);
+
+    const auto realApprox = [&](int idx) {
+        return approx[0][idx] + (approxDelta.empty() ? 0.0 : approxDelta[0][idx]);
+    };
+    const auto realWeight = [&](int idx) {
+        return UseWeights && !weight.empty() ? weight[idx] : 1.0f;
+    };
+
+    for (int i = begin; i < end; ++i) {
+        sortedSamples.push_back({realApprox(i), target[i], realWeight(i)});
+    }
+
+    std::sort(sortedSamples.begin(), sortedSamples.end(), [](const Sample& l, const Sample& r) {return l.approx < r.approx;});
+
+    int curNegCount = 0;
+    double curTp = 0;
+    double curFp = 0;
+    double curFn = 0;
+
+    for (int i = 0; i < elemCount; ++i) {
+        if (sortedSamples[i].target == PositiveClass) {
+            curTp += sortedSamples[i].weight;
+        } else {
+            curFp += sortedSamples[i].weight;
+        }
+    }
+
+    CB_ENSURE(curTp > 0, "No element of a positive class");
+
+    double prevPrecision = 0;
+    double prevRecall = 1;
+    double& ap = error.Stats[0];
+
+    auto isApproxesEqual = [] (double approxL, double approxR) {
+        return Abs(approxL - approxR) < 1e-8;
+    };
+
+    while (curNegCount <= elemCount) {
+        double precision = (curTp == 0 && curFp == 0) ? 1 : curTp / (curTp + curFp + 0.0);
+        double recall = curTp / (curTp + curFn + 0.0);
+
+        // step rule: each recall increment is weighted by the precision at the larger-recall (lower threshold) point
+        ap += (prevRecall - recall) * prevPrecision;
+
+        prevRecall = recall;
+        prevPrecision = precision;
+
+        auto moveOneBorder = [&]() {
+            if (curNegCount < elemCount) {
+                auto curWeight = sortedSamples[curNegCount].weight;
+                if (sortedSamples[curNegCount].target == PositiveClass) {
+                    curTp -= curWeight;
+                    curFn += curWeight;
+                } else {
+                    curFp -= curWeight;
+                }
+            }
+            ++curNegCount;
+        };
+
+        moveOneBorder();
+        while (curNegCount < elemCount && isApproxesEqual(sortedSamples[curNegCount - 1].approx, sortedSamples[curNegCount].approx)) {
+            moveOneBorder();
+        }
+    }
+
+    return error;
+}
+
+void TAveragePrecisionMetric::GetBestValue(EMetricBestValue* valueType, float* bestValue) const {
+    *valueType = EMetricBestValue::Max;
+    if (bestValue) {
+        *bestValue = 1;
+    }
+}
+
+TVector<TParamSet> TAveragePrecisionMetric::ValidParamSets() {
+    return {
+        TParamSet{
+            {
+                TParamInfo{"use_weights", false, false},
+                TParamInfo{"hints", false, "skip_train~true"}
+            },
+            ""
+        }
+    };
+}
+
 /* Precision-Recall AUC */
 
 namespace {
@@ -6412,6 +6575,9 @@ TVector<THolder<IMetric>> CreateMetric(ELossFunction metric, const TLossParams& 
         case ELossFunction::PRAUC:
             AppendTemporaryMetricsVector(TPRAUCMetric::Create(config), &result);
             break;
+        case ELossFunction::AveragePrecision:
+            AppendTemporaryMetricsVector(TAveragePrecisionMetric::Create(config), &result);
+            break;
         case ELossFunction::MultiClass:
             AppendTemporaryMetricsVector(TMultiClassMetric::Create(config), &result);
             break;
@@ -6660,6 +6826,8 @@ TVector<TParamSet> ValidParamSets(ELossFunction metric) {
             return TMSLEMetric::ValidParamSets();
         case ELossFunction::PRAUC:
             return TPRAUCMetric::ValidParamSets();
+        case ELossFunction::AveragePrecision:
+            return TAveragePrecisionMetric::ValidParamSets();
         case ELossFunction::MultiClass:
             return TMultiClassMetric::ValidParamSets();
         case ELossFunction::MultiClassOneVsAll:

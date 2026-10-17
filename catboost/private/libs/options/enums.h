@@ -201,6 +201,7 @@ enum class ELossFunction {
     LogLikelihoodOfPrediction,
     NormalizedGini,
     PRAUC,
+    AveragePrecision,
 
     /* pair metrics */
 

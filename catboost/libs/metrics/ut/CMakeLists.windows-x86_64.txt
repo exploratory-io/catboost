@@ -31,6 +31,7 @@ target_allocator(catboost-libs-metrics-ut
 
 target_sources(catboost-libs-metrics-ut PRIVATE
   ${PROJECT_SOURCE_DIR}/catboost/libs/metrics/ut/auc_ut.cpp
+  ${PROJECT_SOURCE_DIR}/catboost/libs/metrics/ut/average_precision_ut.cpp
   ${PROJECT_SOURCE_DIR}/catboost/libs/metrics/ut/auc_mu_ut.cpp
   ${PROJECT_SOURCE_DIR}/catboost/libs/metrics/ut/brier_score_ut.cpp
   ${PROJECT_SOURCE_DIR}/catboost/libs/metrics/ut/balanced_accuracy_ut.cpp

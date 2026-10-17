@@ -328,6 +328,7 @@ THolder<IMetric> MakeCustomMetric(const TCustomMetricDescriptor& descriptor);
 
 THolder<IMetric> MakeMultiClassPRAUCMetric(const TLossParams& params, int positiveClass);
 THolder<IMetric> MakeBinClassPRAUCMetric(const TLossParams& params);
+THolder<IMetric> MakeBinClassAveragePrecisionMetric(const TLossParams& params);
 
 TVector<THolder<IMetric>> CreateMetricsFromDescription(const TVector<TString>& description, int approxDim);
 
