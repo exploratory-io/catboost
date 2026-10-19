@@ -13,6 +13,49 @@
 [![Telegram](https://img.shields.io/badge/chat-on%20Telegram-2ba2d9.svg)](https://t.me/catboost_en)
 [![Twitter](https://img.shields.io/badge/@CatBoostML--_.svg?style=social&logo=twitter)](https://twitter.com/CatBoostML)
 
+## Exploratory fork (`exploratory-1.2.10`)
+
+This branch is catboost **v1.2.10** plus one change, used by [Exploratory](https://exploratory.io) (R package version **1.2.10.1**):
+
+- New binary-classification metric `AveragePrecision` (`ELossFunction::AveragePrecision`), equal to scikit-learn `average_precision_score`: the step sum `sum((R_n - R_{n-1}) * P_n)` with tied scores grouped. It is maximized (best value 1), supports `use_weights`, and skips train-set evaluation by default (like `PRAUC`). Use it as `eval_metric="AveragePrecision"`. The learning-curve column in `test_error.tsv` is `AveragePrecision`.
+- Code: `catboost/libs/metrics/metric.cpp` (`TAveragePrecisionMetric`), `catboost/private/libs/options/{enums.h,enum_helpers.cpp}`, unit test `catboost/libs/metrics/ut/average_precision_ut.cpp`.
+- `PRAUC` is untouched, and so are the model format and all other metrics: predictions for the same seed and data are identical to 1.2.10.
+
+### Build recipe (R package only, `--targets catboostr`)
+
+Common: CMake **< 4** (3.24-3.31), Conan **2.x**, Ninja, Python 3, clang. Run `build/build_native.py` from the repo root.
+
+- **macOS universal2** (needs Xcode or Command Line Tools with a recent SDK; built on macOS 26):
+
+  ```bash
+  python build/build_native.py --targets catboostr --build-root-dir=./b --macos-universal-binaries --macosx-version-min=11.0
+  # result: b/catboost/R-package/src/libcatboostr.dylib (fat x86_64 + arm64, minos 11.0)
+  ```
+
+- **Linux x86_64**: build in the same base image as the R Docker image (`rocker/r-ver:4.6.1`, Ubuntu 24.04), after `apt-get install clang lld python3-venv python3-dev git ninja-build make binutils` and `pip install "cmake<4" "conan>=2,<3"`:
+
+  ```bash
+  python3 build/build_native.py --targets catboostr --build-root-dir=/work/b   # ~10 min on 16 cores
+  # result: /work/b/catboost/R-package/src/libcatboostr.so (needs GLIBC >= 2.38)
+  ```
+
+- **Windows x64**: VS 2022 Build Tools with the clang-cl components and the MSVC v14.29 toolset
+  (`Microsoft.VisualStudio.Component.VC.14.29.16.11.x86.x64`, the `build_native.py` default), Python 3.12, CMake < 4, Conan 2, Ninja **1.12.1** (from the GitHub release; PyPI has no such wheel). `build_native.py` only looks for `Community`/`Enterprise`, so for Build Tools make a junction first:
+
+  ```bat
+  mklink /J C:\vs\2022\Community "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
+  python build\build_native.py --targets catboostr --build-root-dir=C:\cb\b --msvs-installation-path=C:\vs
+  :: result: C:\cb\b\catboost\R-package\src\catboostr.dll
+  ```
+
+### Packaging
+
+Copy `DESCRIPTION NAMESPACE README.md R inst man tests` from `catboost/R-package` into a `catboost/` directory, put the library at `catboost/inst/libs/libcatboostr.so` (macOS: also a `libcatboostr.dylib` symlink; Windows: `inst/libs/x64/libcatboostr.dll`), tar it as in `ci/build_all.py` (`build_r_package`), then turn it into an installed-package binary with `R CMD INSTALL --build --no-staged-install` (`--no-staged-install` is needed on macOS, where R's staged-install path check rejects the library). The result is what Exploratory publishes: `catboost_1.2.10.1.tgz` (macOS), `catboost_1.2.10.1.zip` (Windows), `catboost_1.2.10.1_R_x86_64-pc-linux-gnu.tar.gz` (Linux, Docker image).
+
+### Verification used
+
+`eval_metric="AveragePrecision"` trains and early-stops in the maximize direction; its last validation value equals `sklearn.metrics.average_precision_score` on the validation predictions (to 1e-10), including ties and `use_weights`; `AUC` predictions with categorical columns are byte-identical to the 1.2.10 binary for the same seed.
+
 CatBoost is a machine learning method based on [gradient boosting](https://en.wikipedia.org/wiki/Gradient_boosting) over decision trees.
 
 Main advantages of CatBoost:
